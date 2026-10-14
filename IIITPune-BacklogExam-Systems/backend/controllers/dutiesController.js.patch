@@ -1,0 +1,82 @@
+--- backend/controllers/dutiesController.js
++++ backend/controllers/dutiesController.js
+@@ -227,8 +227,11 @@
+     const dutyId = parseInt(req.params.dutyId, 10);
+     const { faculty_id } = req.body;
+ 
++    const new_faculty_id = parseInt(faculty_id, 10);
++
+     if (!dutyId || isNaN(dutyId)) {
+       return res.status(400).json({ error: 'Valid dutyId is required' });
+     }
+-    if (!faculty_id) {
+-      return res.status(400).json({ error: 'faculty_id is required' });
++    if (!new_faculty_id || isNaN(new_faculty_id)) {
++      return res.status(400).json({ error: 'Valid integer faculty_id is required' });
+     }
+ 
+@@ -236,5 +239,5 @@
+     const dutyRes = await db.query(
+-      `SELECT d.id, d.faculty_id, d.status, d.exam_schedule_id,
+-              es.exam_date, es.time_slot
++      `SELECT d.id, d.faculty_id, d.status, d.exam_schedule_id, es.room_id,
++              es.exam_date, es.time_slot, es.academic_year
+        FROM duties d
+        JOIN exam_schedule es ON d.exam_schedule_id = es.id
+@@ -258,5 +261,5 @@
+     const facultyRes = await db.query(
+       `SELECT id, name, designation, max_duty_load, is_available
+        FROM faculty WHERE id = $1`,
+-      [faculty_id]
++      [new_faculty_id]
+     );
+ 
+@@ -263,5 +266,5 @@
+     if (facultyRes.rows.length === 0) {
+-      return res.status(404).json({ error: `Faculty with ID ${faculty_id} not found` });
++      return res.status(404).json({ error: `Faculty with ID ${new_faculty_id} not found` });
+     }
+ 
+@@ -274,18 +277,18 @@
+     // 5. Check max_duty_load
++    // We need to count the groups, not individual rows.
+     const loadRes = await db.query(
+-      `SELECT COUNT(*)::int AS count FROM duties WHERE faculty_id = $1 AND id != $2`,
+-      [faculty_id, dutyId]
++      `SELECT COUNT(DISTINCT d.exam_schedule_id)::int AS count FROM duties d JOIN exam_schedule es ON d.exam_schedule_id = es.id WHERE d.faculty_id = $1 AND d.faculty_id != $2`,
++      [new_faculty_id, duty.faculty_id]
+     );
+     if (loadRes.rows[0].count >= newFaculty.max_duty_load) {
+       return res.status(400).json({
+         error: `Faculty ${newFaculty.name} is already at max duty load (${newFaculty.max_duty_load})`
+       });
+     }
+ 
+     // 6. Check double-booking on same date + time_slot
+     const conflictRes = await db.query(
+       `SELECT d.id FROM duties d
+        JOIN exam_schedule es ON d.exam_schedule_id = es.id
+-       WHERE d.faculty_id = $1
++       WHERE d.faculty_id = $2
+          AND es.exam_date = $3
+          AND es.time_slot = $4
+-         AND d.id != $5`,
+-      [faculty_id, duty.exam_date, duty.time_slot, dutyId]
++         AND es.room_id != $5`,
++      [dutyId, new_faculty_id, duty.exam_date, duty.time_slot, duty.room_id]
+     );
+@@ -300,6 +303,13 @@
+ 
+     // 7. Update the duty (and all others in the same group assigned to the old faculty)
+     await db.query(
+-      `UPDATE duties SET faculty_id = $1, is_manual_override = true WHERE id = $2`,
+-      [faculty_id, dutyId]
++      `UPDATE duties 
++       SET faculty_id = $1, is_manual_override = true 
++       WHERE faculty_id = $2 AND exam_schedule_id IN (
++         SELECT id FROM exam_schedule 
++         WHERE room_id = $3 AND exam_date = $4 AND time_slot = $5 AND academic_year = $6
++       )`,
++      [new_faculty_id, duty.faculty_id, duty.room_id, duty.exam_date, duty.time_slot, duty.academic_year]
+     );
+ 

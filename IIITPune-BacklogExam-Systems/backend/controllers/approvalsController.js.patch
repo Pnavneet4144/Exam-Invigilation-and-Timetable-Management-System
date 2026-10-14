@@ -1,0 +1,85 @@
+--- backend/controllers/approvalsController.js
++++ backend/controllers/approvalsController.js
+@@ -21,12 +21,13 @@
+ 
+ /**
+  * Resolve the target table name from the type parameter.
+- * Only 'schedule' and 'duty' are valid.
++ * Only 'schedule', 'duty', and 'regular_duty' are valid.
+  * 
+- * @param {string} type - 'schedule' or 'duty'
++ * @param {string} type - 'schedule', 'duty', or 'regular_duty'
+  * @returns {string|null} The table name, or null if invalid
+  */
+ function resolveTable(type) {
+   if (type === 'schedule') return 'exam_schedule';
+   if (type === 'duty') return 'duties';
++  if (type === 'regular_duty') return 'regular_exam_duty';
+   return null;
+@@ -35,5 +36,5 @@
+ /**
+  * POST /api/approvals/submit
+- * Body: { type: 'schedule'|'duty', ids: [1,2,3], academic_year: '2026-2027' }
++ * Body: { type: 'schedule'|'duty'|'regular_duty', ids: [1,2,3], academic_year: '2026-2027' }
+  * 
+@@ -48,5 +49,5 @@
+     const table = resolveTable(type);
+     if (!table) {
+-      return res.status(400).json({ error: "type must be 'schedule' or 'duty'" });
++      return res.status(400).json({ error: "type must be 'schedule', 'duty', or 'regular_duty'" });
+     }
+ 
+@@ -65,5 +66,5 @@
+     } else if (academic_year) {
+       // Submit ALL draft rows for the academic year
+-      if (table === 'exam_schedule') {
++      if (table === 'exam_schedule' || table === 'regular_exam_duty') {
+         result = await db.query(
+-          `UPDATE exam_schedule SET status = 'pending_approval'
++          `UPDATE ${table} SET status = 'pending_approval'
+            WHERE academic_year = $1 AND status = 'draft'
+@@ -101,5 +102,5 @@
+ /**
+  * GET /api/approvals/pending
+- * Query: ?type=schedule|duty
++ * Query: ?type=schedule|duty|regular_duty
+  * 
+@@ -111,5 +112,5 @@
+ 
+     if (!type || !resolveTable(type)) {
+-      return res.status(400).json({ error: "type query param must be 'schedule' or 'duty'" });
++      return res.status(400).json({ error: "invalid type" });
+     }
+ 
+@@ -135,5 +136,5 @@
+          ORDER BY es.exam_date, es.time_slot`
+       );
+-    } else {
++    } else if (type === 'duty') {
+       result = await db.query(
+         `SELECT d.id, d.faculty_id, d.is_manual_override,
+@@ -155,4 +156,22 @@
+          ORDER BY es.exam_date, es.time_slot`
+       );
++    } else if (type === 'regular_duty') {
++      result = await db.query(
++        `SELECT red.id, red.exam_date, red.time_slot, red.academic_year,
++                red.status, red.is_manual_override,
++                red.rejection_notes,
++                r.room_no, r.building,
++                sec.class_name, sec.section_name,
++                sub.subject_code, sub.subject_name,
++                f1.name AS f1_name, f1.designation AS f1_desig,
++                f2.name AS f2_name, f2.designation AS f2_desig,
++                u.name AS created_by_name
++         FROM regular_exam_duty red
++         JOIN rooms r ON red.room_id = r.id
++         JOIN sections sec ON red.section_id = sec.id
++         JOIN subjects sub ON red.subject_id = sub.id
++         LEFT JOIN faculty f1 ON red.faculty_id_1 = f1.id
++         LEFT JOIN faculty f2 ON red.faculty_id_2 = f2.id
++         LEFT JOIN users u ON red.created_by = u.id
++         WHERE red.status = 'pending_approval'
++         ORDER BY red.exam_date, red.time_slot`
++      );
+     }
